@@ -343,25 +343,35 @@ def link_walker(path):
                 yield root, dirs, files
 
 
-def search_file(expr, path):
+def search_file(expr, path, fixprefix=False):
     """
     Given a search path, recursively descend to find files that match a
     regular expression.
     """
     ans = []
+    trimpath = None
     pattern = re.compile(expr)
     if path is None or path == ".":
         path = os.getcwd()
     elif not os.path.exists(path):
         raise IOError("Unknown directory '"+path+"'")
+    origpath = os.path.abspath(path)
     for root, dirs, files in link_walker(path):
+        if fixprefix and trimpath is None:
+            trimpath = root + "/" # may be bad??? to assume the missing / # if not trimpath.endswith("/"): trimpath = trimpath + "/"
+            trimpathlen = len(trimpath)
+            if options.verbose:
+                sys.stdout.write( "  Fixing prefix: %s to %s\n" % (trimpath,origpath,))
         for name in files:
             if pattern.match(name):
                 name = os.path.join(root,name)
                 if os.path.islink(name):
-                    ans.append( os.path.abspath(os.readlink(name)) )
+                    name = os.path.abspath(os.readlink(name))
                 else:
-                    ans.append( os.path.abspath(name) )
+                    name = os.path.abspath(name)
+                if fixprefix and name.startswith(trimpath):
+                    name = origpath + "/" + name[trimpathlen:]
+                ans.append( name )
     return ans
 
 
@@ -403,6 +413,55 @@ def get_datafiles(flist, options):
             allfiles.update(gcda_files)
             allfiles.update(gcno_files)
     return allfiles
+
+
+def find_src_without_gcov_data(flist, covdata, options):
+    allfiles=set()
+    for dir_ in flist:
+        files=[];
+        for sfilter in options.include_unreachable_files:
+            if options.verbose:
+                sys.stdout.write( "Scanning directory %s for source files matching %s ...\n" % (dir_, sfilter.pattern, ) )
+            files.extend(search_file(sfilter, dir_, True))
+        if options.verbose:
+            sys.stdout.write(
+               "Found %d files (and will process %d)\n" %
+               ( len(files), len(files) ) )
+        allfiles.update(files)
+
+    for file in allfiles:
+        process_src_without_gcov_data(file,covdata,options)
+
+def process_src_without_gcov_data(fname, covdata, options):
+    if options.verbose:
+        sys.stdout.write("Checking source file %s\n" % fname)
+    #
+    # Return if the filename does not match the filter
+    #
+    filtered_fname = None
+    for i in range(0,len(options.filter)):
+        if options.filter[i].match(fname):
+            filtered_fname = options.root_filter.sub('',fname)
+            break
+    if filtered_fname is None:
+        if options.verbose:
+            sys.stdout.write("  Filtering for source file %s due to no matches on %s\n" % (fname, [ x.pattern for x in options.filter]))
+        return
+    #
+    # Return if the filename matches the exclude pattern
+    #
+    for i in range(0,len(options.exclude)):
+        if (filtered_fname is not None and options.exclude[i].match(filtered_fname)) or \
+               options.exclude[i].match(fname) or \
+               options.exclude[i].match(os.path.abspath(fname)):
+            if options.verbose:
+                sys.stdout.write("  Excluding source file %s\n" % fname)
+            return
+
+    if not fname in covdata:
+        if options.verbose:
+            sys.stdout.write("  Adding missed file %s\n" % fname)
+        covdata[fname] = CoverageData(fname,set(),set(),{},{},set())
 
 
 #
@@ -1871,6 +1930,11 @@ parser.add_option("--exclude-unreachable-branches",
         action="store_true",
         dest="exclude_unreachable_branches",
         default=False)
+parser.add_option("-i","--include-unreachable-files",
+        help="Include files not reached by the profiler as zero coverage files",
+        action="append",
+        dest="include_unreachable_files",
+        default=[])
 parser.add_option("-g", "--use-gcov-files",
         help="Use preprocessed gcov files for analysis.",
         action="store_true",
@@ -1945,11 +2009,13 @@ else:
 #
 if len(args) == 1:
     if options.root is None:
-        datafiles = get_datafiles(["."], options)
+        rootdirs = ["."]
     else:
-        datafiles = get_datafiles([options.root], options)
+        rootdirs = [options.root]
 else:
-    datafiles = get_datafiles(args[1:], options)
+    rootdirs = args[1:]
+
+datafiles = get_datafiles(rootdirs, options)
 #
 # Get coverage data
 #
@@ -1959,6 +2025,16 @@ for file_ in datafiles:
         process_existing_gcov_file(file_,covdata,options)
     else:
         process_datafile(file_,covdata,options)
+
+#
+# Add in files, which may not have been reached by coverage, but are known
+#
+for i in range(0,len(options.include_unreachable_files)):
+    options.include_unreachable_files[i] = re.compile(options.include_unreachable_files[i])
+if len(options.include_unreachable_files) != 0:
+    find_src_without_gcov_data(rootdirs, covdata, options)
+
+
 if options.verbose:
     sys.stdout.write("Gathered coveraged data for "+str(len(covdata))+" files\n")
 #
