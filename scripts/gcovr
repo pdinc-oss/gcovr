@@ -461,7 +461,7 @@ def process_src_without_gcov_data(fname, covdata, options):
     if not fname in covdata:
         if options.verbose:
             sys.stdout.write("  Adding missed file %s\n" % fname)
-        covdata[fname] = CoverageData(fname,set(),set(),{},{},set())
+        covdata[fname] = CoverageData(fname,set(1),set(),{},{},set())
 
 
 #
