@@ -459,11 +459,18 @@ def process_src_without_gcov_data(fname, covdata, options):
             return
 
     if not fname in covdata:
+        uncovered = set()
+        noncode = set()
         if options.verbose:
             sys.stdout.write("  Adding missed file %s\n" % fname)
-        uncovered = set()
-        uncovered.add(1)
-        covdata[fname] = CoverageData(fname,uncovered,set(),{},{},set())
+            with open(aliases.unalias_path(fname)) as f:
+                for i, l in enumerate(f,1):
+                    # this is a very dumb approximation of code/noncode line status, it even marks comments as code
+                    if l.strip():
+                        uncovered.add(i)
+                    else:
+                        noncode.add(i)
+        covdata[fname] = CoverageData(fname,uncovered,set(),{},{},noncode)
 
 
 #
